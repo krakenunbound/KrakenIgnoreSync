@@ -82,11 +82,23 @@ function C_FriendList.IsIgnored(name)
 end
 function C_FriendList.GetNumIgnores() return #list() end
 function C_FriendList.GetIgnoreName(i) return list()[i] end
+-- chat filters and the server's system replies
+FILTERS = {}
+SHOWN_SYSTEM = {}
+function ChatFrame_AddMessageEventFilter(event, fn) FILTERS[#FILTERS+1] = {event=event, fn=fn} end
+function System(msg)
+  for _, f in ipairs(FILTERS) do
+    if f.event == "CHAT_MSG_SYSTEM" and f.fn(nil, "CHAT_MSG_SYSTEM", msg) then return end
+  end
+  SHOWN_SYSTEM[#SHOWN_SYSTEM+1] = msg
+end
 function C_FriendList.AddIgnore(name)
   CALLS.add = CALLS.add + 1; CALLS.addNames[#CALLS.addNames+1] = name
   C_Timer.After(0.1, function()
-    if VALID[name:lower()] and not find(name) and #SERVER[ME] < 50 then
-      table.insert(SERVER[ME], name); Fire("IGNORELIST_UPDATE")
+    if not VALID[name:lower()] then System("Player not found.")
+    elseif find(name) then System(name .. " is already being ignored.")
+    elseif #SERVER[ME] < 50 then
+      table.insert(SERVER[ME], name); System(name .. " is now being ignored."); Fire("IGNORELIST_UPDATE")
     end
   end)
   return true
@@ -94,7 +106,8 @@ end
 function C_FriendList.DelIgnore(name)
   CALLS.del = CALLS.del + 1
   C_Timer.After(0.1, function()
-    local i = find(name); if i then table.remove(SERVER[ME], i); Fire("IGNORELIST_UPDATE") end
+    local i = find(name)
+    if i then table.remove(SERVER[ME], i); System(name .. " is no longer being ignored."); Fire("IGNORELIST_UPDATE") end
   end)
   return true
 end
@@ -151,7 +164,7 @@ login("Bob")
 check("2 Second character receives the shared ignores", has("Troll") and has("Spammer") and has("Griefer"))
 check("2 A character never ignores itself", not has("Bob") and "Bob" not in lua.eval("CALLS.addNames").values())
 check("2 Empty list before the server sends it isn't read as unignores", lua.eval('KrakenIgnoreSync_DB.entries["troll-arnold"].removed') is None)
-check("2 Reports what it synced", any("ignored 2" in m for m in chat()))
+check("2 Reports what it synced", any("Re-applied 2 ignores" in m for m in chat()))
 logout()
 
 # 3. Alice gets Bob's Griefer.
@@ -268,7 +281,7 @@ lua.execute('IGNORE_DELAY = 14')
 before = lua.eval("CALLS.add")
 login("Hana", until=40)
 check("12 Ignore list arriving after the friends list: nobody is re-ignored", lua.eval("CALLS.add") == before)
-check("12 ...and no 'Synced' message", not any("Synced from your other characters" in m for m in chat()))
+check("12 ...and no 'Synced' message", not any("Re-applied" in m for m in chat()))
 check("12 ...and the list is unchanged", count() == 3)
 logout()
 # Another character, also late, gets the names it lacks and only those.
@@ -307,6 +320,41 @@ lua.execute('Advance(NOW + 6)')
 check("14 ...then it syncs without waiting the full minute", lua.eval("CALLS.add") > before)
 logout()
 lua.execute('IGNORE_DELAY = nil; NEVER_ARRIVES = false')
+
+# 15. Forever since build 70862: the ignore list never comes at login. After the wait
+#     the names are re-added, quietly: the server's "now being ignored" lines are hidden
+#     and replaced by one summary saying why.
+lua.execute('UNIQUE = true; KrakenIgnoreSync_DB = nil')
+names = ["Ana Bell", "Cy Dorn", "Eve Fox", "Gil Hart"]
+valid(*names)
+server("Kai", *names)
+lua.execute('CHARS["Kai"] = nil')
+login("Kai", until=20)           # first login: list arrives, everything learned
+logout()
+lua.execute('IGNORE_DELAY = 14; NEVER_ARRIVES = true')
+server("Kai")                    # the server dropped them
+lua.execute('SHOWN_SYSTEM = {}')
+login("Kai", until=90)
+shown = list(lua.eval("SHOWN_SYSTEM").values())
+check("15 Dropped list: all names re-added", all(has(n) for n in names))
+check("15 No 'now being ignored' line per name", not any("now being ignored" in m for m in shown))
+check("15 One summary line instead, saying the list was empty at login",
+      sum("Re-applied 4 ignores" in m for m in chat()) == 1 and any("empty at login" in m for m in chat()))
+logout()
+# The server kept them but never sent the list: it answers "already ignored"
+lua.execute('SHOWN_SYSTEM = {}')
+login("Kai", until=90)
+shown = list(lua.eval("SHOWN_SYSTEM").values())
+check("15 Kept but unsent: 'already being ignored' lines are hidden too", not any("already being ignored" in m for m in shown))
+check("15 ...and the summary says the server already had them", any("server already had 4" in m for m in chat()))
+logout()
+lua.execute('IGNORE_DELAY = nil; NEVER_ARRIVES = false')
+# The player's own /ignore is never hidden
+lua.execute('SHOWN_SYSTEM = {}')
+login("Kai", until=20)
+run('System("Zed is now being ignored.")')
+check("15 Messages for names the addon didn't send are left alone", "Zed is now being ignored." in lua.eval("SHOWN_SYSTEM").values())
+logout()
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

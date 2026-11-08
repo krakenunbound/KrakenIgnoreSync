@@ -6,7 +6,7 @@ WoW keeps a separate ignore list on each character. With this addon, when you ig
 someone on one character, your other characters ignore them the next time you log
 in on them. Unignoring works the same way.
 
-Current version: **1.0.1**, for the official Forever client (build 1.60.1.70790,
+Current version: **1.0.2**, for the official Forever client (build 1.60.1.70790,
 interface 16001).
 
 ## How it works
@@ -24,6 +24,16 @@ interface 16001).
     ignored shows an empty list, it keeps waiting, for up to a minute.
   - **Checking each name.** Before ignoring or unignoring anyone, it asks the game
     whether they're already on the list, so nobody is re-sent.
+  - **When the list never comes (Forever, since client build 70862).** On Forever
+    the game often shows a character's ignore list as empty at login, and keeps
+    showing it empty, and the server accepts every name as a new ignore. So after the
+    minute's wait the names really are re-added. Since 1.0.2 this is quiet: the
+    server's "*Name* is now being ignored" line for each name the addon sends is
+    hidden, and you get one line instead, for example
+    `Re-applied 22 ignores from your other characters. The game showed this
+    character's ignore list as empty at login.` If the server answers "already
+    being ignored", the summary says how many it already had. Ignores you make
+    yourself always show as normal.
 - **Your existing lists.** A character's current ignores are added to the shared
   list the first time it logs in with the addon. Log in on each character once and
   everything is merged.
@@ -79,6 +89,7 @@ It covers:
 - importing existing lists, and syncing in both directions
 - unignore and re-ignore, last change winning
 - the empty list the server sends at login not being read as unignores
+- re-adding a list the game never sent, quietly, with one summary line
 - rejected names
 - the 50-name limit
 - `/kis remove`, `keep`, `pause`, `status` and `list`

@@ -2,7 +2,7 @@
 ## Title: Kraken Ignore Sync
 ## Notes: Shares one ignore list across all your characters. Ignore or unignore someone on one character and the rest follow. /kis
 ## Author: The Kraken
-## Version: 1.0.1
+## Version: 1.0.2
 ## IconTexture: Interface\Icons\Spell_Holy_Silence
 ## DefaultState: enabled
 ## SavedVariables: KrakenIgnoreSync_DB

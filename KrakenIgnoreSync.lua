@@ -187,19 +187,78 @@ local function BuildQueue()
 end
 
 local added, removed = 0, 0
+local emptyAtLogin = false   -- the game showed no ignores at login on a character that had some
+
+---------------------------------------------------------------- the server's replies
+-- Each AddIgnore / DelIgnore gets a system message back ("X is now being ignored.").
+-- For our own sync those are hidden and summed up in one line instead of one per name.
+local sent = {}              -- [lowercase name] = time we sent it
+local replies = { added = 0, already = 0, removed = 0 }
+local patterns
+
+local function Pattern(fmt, fallback)
+    if type(fmt) ~= "string" or not fmt:find("%%s") then fmt = fallback end
+    local p = fmt:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+    p = p:gsub("%%%%s", "(.+)")
+    return "^" .. p .. "$"
+end
+
+local function BuildPatterns()
+    patterns = {
+        added = Pattern(rawget(_G, "ERR_IGNORE_ADDED_S"), "%s is now being ignored."),
+        already = Pattern(rawget(_G, "ERR_IGNORE_ALREADY_S"), "%s is already being ignored."),
+        removed = Pattern(rawget(_G, "ERR_IGNORE_REMOVED_S"), "%s is no longer being ignored."),
+    }
+end
+
+local function SystemFilter(_, _, msg)
+    if type(msg) ~= "string" or (type(issecretvalue) == "function" and issecretvalue(msg)) then return false end
+    if not patterns or not next(sent) then return false end
+    for kind, pattern in pairs(patterns) do
+        local name = msg:match(pattern)
+        if name then
+            name = name:gsub("|H.-|h%[?(.-)%]?|h", "%1"):lower()
+            local at = sent[name]
+            if at and GetTime() - at <= 15 then
+                sent[name] = nil
+                replies[kind] = replies[kind] + 1
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function Sent(name)
+    if type(name) == "string" then sent[name:lower()] = GetTime() end
+end
+
+local function Summary()
+    local parts = {}
+    if added > 0 then
+        local line = ("re-applied %d ignore%s from your other characters"):format(added, added == 1 and "" or "s")
+        if replies.already > 0 then
+            line = line .. (" (the server already had %d of them)"):format(replies.already)
+        end
+        parts[#parts + 1] = line
+    end
+    if removed > 0 then parts[#parts + 1] = ("unignored %d"):format(removed) end
+    if #parts > 0 then
+        local why = emptyAtLogin and " The game showed this character's ignore list as empty at login." or ""
+        say(table.concat(parts, ", "):gsub("^%l", string.upper) .. "." .. why)
+    end
+    added, removed = 0, 0
+    replies.added, replies.already, replies.removed = 0, 0, 0
+    emptyAtLogin = false
+end
 
 local function Finish()
     applying = false
     -- Catch any change the player made while we were applying. Our own adds and
     -- removes match the shared list, so they aren't mistaken for the player's.
     Learn((CurrentList()), true)
-    if added > 0 or removed > 0 then
-        local parts = {}
-        if added > 0 then parts[#parts + 1] = ("ignored %d"):format(added) end
-        if removed > 0 then parts[#parts + 1] = ("unignored %d"):format(removed) end
-        say("Synced from your other characters: " .. table.concat(parts, ", ") .. ".")
-    end
-    added, removed = 0, 0
+    -- The last replies arrive a moment after the last request.
+    if added > 0 or removed > 0 then C_Timer.After(2, Summary) end
 end
 
 -- The game's own answer for one name: true, false, or nil when it won't say.
@@ -221,6 +280,7 @@ Pump = function()
         if IsIgnoredHere(name) == true then
             -- Already on this character's list under another spelling: nothing to do.
         else
+            Sent(name)
             local ok = safe(C_FriendList.AddIgnore, name)
             if ok == false then
                 say(("Couldn't ignore %s on this character (the name may have changed)."):format(name))
@@ -231,6 +291,7 @@ Pump = function()
     else
         failedThisSession[job.key] = true
         if IsIgnoredHere(job.name) ~= false then
+            Sent(job.name)
             safe(C_FriendList.DelIgnore, job.name)
             removed = removed + 1
         end
@@ -263,14 +324,20 @@ local BecomeReady
 local function CheckLater()
     if checkPending or ready then return end
     checkPending = true
-    C_Timer.After(READY_CHECK, function() checkPending = false; BecomeReady() end)
+    C_Timer.After(READY_CHECK, function()
+        checkPending = false
+        -- Ask again: on Forever the ignore list sometimes never comes on its own.
+        if not ready then safe(C_FriendList and C_FriendList.ShowFriends) end
+        BecomeReady()
+    end)
 end
 
 BecomeReady = function()
     if ready then return end
     if not ListArrived() then CheckLater(); return end
     ready = true
-    local list = CurrentList()
+    local list, count = CurrentList()
+    emptyAtLogin = count == 0 and next(char.known) ~= nil
     -- At login only additions are learned. Anything missing gets re-added
     -- unless another character unignored it.
     Learn(list, false)
@@ -300,6 +367,10 @@ events:SetScript("OnEvent", function(_, event, arg1)
         db.entries = db.entries or {}
         char.known = char.known or {}
         char.excluded = char.excluded or {}
+        BuildPatterns()
+        if type(ChatFrame_AddMessageEventFilter) == "function" then
+            ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", SystemFilter)
+        end
     elseif event == "PLAYER_LOGIN" then
         playerKey = Key(safe(UnitName, "player") or "", RealmName())
         loginAt = GetTime()
